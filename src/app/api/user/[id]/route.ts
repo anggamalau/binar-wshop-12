@@ -1,76 +1,45 @@
 import { NextResponse } from "next/server";
 import { executeQuery } from "@/lib/database";
 import { authMiddleware } from "@/lib/jwt";
+import { SingleUserQueryBuilder } from "./SingleUserQueryBuilder";
+import { SingleUserTransformer } from "./SingleUserTransformer";
+import { UserIdValidator } from "./UserIdValidator";
+import { UserApiResponse, ErrorResponse, SingleUserDatabase } from "./types";
 
-async function getUserById(request: Request) {
+async function getUserById(request: Request): Promise<NextResponse<UserApiResponse | ErrorResponse>> {
   console.time("Get User by ID Execution");
 
   try {
-    // Extract user ID from URL path
-    const url = new URL(request.url);
-    const pathParts = url.pathname.split("/");
-    const userId = pathParts[pathParts.length - 1];
-
-    if (!userId || isNaN(parseInt(userId))) {
+    const validation = UserIdValidator.extractAndValidateUserId(request.url);
+    
+    if (!validation.isValid) {
       console.timeEnd("Get User by ID Execution");
       return NextResponse.json(
-        { message: "Invalid user ID." },
+        { message: validation.error || "Invalid user ID." },
         { status: 400 }
       );
     }
 
-    // Bad practice: inefficient query with wildcard select
-    const query = `
-      SELECT 
-        u.id,
-        u.username,
-        u.full_name,
-        u.birth_date,
-        u.bio,
-        u.long_bio,
-        u.profile_json,
-        u.address,
-        u.phone_number,
-        u.created_at,
-        u.updated_at,
-        a.email,
-        ur.role,
-        ud.division_name
-      FROM users u
-      LEFT JOIN auth a ON u.auth_id = a.id
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN user_divisions ud ON u.id = ud.user_id
-      WHERE u.id = $1
-    `;
-
-    const result = await executeQuery(query, [userId]);
+    const query = SingleUserQueryBuilder.buildGetUserByIdQuery();
+    const result = await executeQuery(query, [validation.userId]);
 
     if (result.rows.length === 0) {
       console.timeEnd("Get User by ID Execution");
-      return NextResponse.json({ message: "User not found." }, { status: 404 });
+      return NextResponse.json(
+        { message: "User not found." },
+        { status: 404 }
+      );
     }
 
-    const user = result.rows[0];
+    const databaseUser = result.rows[0] as SingleUserDatabase;
+    const transformedUser = SingleUserTransformer.transform(databaseUser);
+
+    const response: UserApiResponse = {
+      user: transformedUser,
+    };
 
     console.timeEnd("Get User by ID Execution");
-    return NextResponse.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        fullName: user.full_name,
-        email: user.email,
-        birthDate: user.birth_date,
-        bio: user.bio,
-        longBio: user.long_bio,
-        profileJson: user.profile_json,
-        address: user.address,
-        phoneNumber: user.phone_number,
-        createdAt: user.created_at,
-        updatedAt: user.updated_at,
-        role: user.role,
-        division: user.division_name,
-      },
-    });
+    return NextResponse.json(response);
   } catch (error) {
     console.error("Get user by ID error:", error);
     console.timeEnd("Get User by ID Execution");
@@ -81,5 +50,4 @@ async function getUserById(request: Request) {
   }
 }
 
-// Bad practice: wrapping with auth middleware
 export const GET = authMiddleware(getUserById);
